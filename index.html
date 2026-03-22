@@ -68,6 +68,12 @@ tbody tr:hover td{background:rgba(99,102,241,.06)}
 .heat-cell{text-align:center!important;font:500 10px 'JetBrains Mono',monospace!important;padding:5px 5px!important;border-right:1px solid rgba(42,49,88,.15)}
 .section-title{font:700 15px 'DM Sans',sans-serif;color:var(--text);margin:28px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--border)}
 .section-title:first-of-type{margin-top:0}
+.avg-toggle{display:inline-flex;align-items:center;gap:6px;padding:5px 14px;border-radius:18px;font:700 11px 'DM Sans',sans-serif;cursor:pointer;border:2px dashed var(--amber);color:var(--amber);background:transparent;transition:all .15s;user-select:none;margin-left:8px}
+.avg-toggle:hover{background:rgba(251,191,36,.08)}
+.avg-toggle.on{border-style:solid;background:var(--amber);color:var(--bg)}
+.avg-toggle .avg-icon{width:14px;height:2px;background:currentColor;border-radius:1px;position:relative}
+.avg-toggle .avg-icon::before{content:'';position:absolute;width:14px;height:2px;background:currentColor;border-radius:1px;top:-4px;left:2px;transform:rotate(-3deg)}
+.chip-sep{width:1px;height:20px;background:var(--border);margin:0 6px;align-self:center}
 .chart-label{font:600 12px 'DM Sans',sans-serif;color:var(--text2);margin-bottom:10px;text-transform:uppercase;letter-spacing:.6px}
 @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 .anim{animation:fadeUp .45s ease both}.d1{animation-delay:.04s}.d2{animation-delay:.08s}.d3{animation-delay:.12s}
@@ -132,7 +138,7 @@ tbody tr:hover td{background:rgba(99,102,241,.06)}
           <button class="chip-act" onclick="pickAllRegions()">All</button>
           <button class="chip-act" onclick="pickNoRegions()">Clear</button>
         </div>
-        <div class="chips" id="regionChips"></div>
+        <div class="chips" id="regionChips" style="align-items:center"></div>
       </div>
       <div class="chart-card anim d3"><div class="chart-box" style="height:300px"><canvas id="stratCanvas"></canvas></div></div>
       <!-- SSM -->
@@ -174,6 +180,7 @@ let currentMetric = 'created';
 let currentView = 'chart';
 let selected = new Set();    // pipeline market chips
 let selectedRegions = new Set(); // student region chips
+let showAverage = true;          // average line toggle
 let chart = null, totalChart = null, stratChart = null, ssmChart = null;
 
 /* ═══════════════════════════════════════════════════════════
@@ -221,12 +228,14 @@ function parseStudentCSV(csvText) {
     }
     if (headerIdx === -1) return null;
 
-    // Extract month headers from columns B onward
+    // Extract month headers from columns B onward — ONLY keep date-like values (e.g. "Mar-26")
     const hdr = rows[headerIdx];
     const months = [], mCols = [];
+    const monthPattern = /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-\s]?\d{2,4}$/i;
     for (let c = 1; c < hdr.length; c++) {
       const v = (hdr[c]||'').trim();
       if (!v) continue;
+      if (!monthPattern.test(v)) continue; // skip non-date columns like "Service Region", YoY summaries
       months.push(v); mCols.push(c);
     }
 
@@ -277,7 +286,7 @@ async function loadAllData() {
     const sResp = await fetch(csvUrl(STUDENT_TAB_NAME));
     if (!sResp.ok) throw new Error(`Failed to fetch "${STUDENT_TAB_NAME}": HTTP ${sResp.status}`);
     STUDENT_DATA = parseStudentCSV(await sResp.text());
-    selectedRegions = new Set(STUDENT_DATA.strat.regions);
+    selectedRegions = new Set(['USCA']);
 
     // Show UI
     document.getElementById('loader').style.display = 'none';
@@ -497,12 +506,15 @@ function renderStudentView() {
 // Region chips (shared by both Strat and SSM)
 function renderRegionChips() {
   if (!STUDENT_DATA) return;
-  document.getElementById('regionChips').innerHTML = STUDENT_DATA.strat.regions.map(r => {
+  const chips = STUDENT_DATA.strat.regions.map(r => {
     const c = regionColor(r), on = selectedRegions.has(r);
     return `<span class="chip${on?' on':''}" style="${on?'background:'+c+';color:#fff;border-color:'+c:''}" onclick="toggleRegion('${r}')">${r}</span>`;
   }).join('');
+  const avgBtn = `<span class="chip-sep"></span><span class="avg-toggle${showAverage?' on':''}" onclick="toggleAverage()"><span class="avg-icon"></span> Average</span>`;
+  document.getElementById('regionChips').innerHTML = chips + avgBtn;
 }
 function toggleRegion(r) { selectedRegions.has(r)?selectedRegions.delete(r):selectedRegions.add(r); renderRegionChips(); buildStudentCharts(); }
+function toggleAverage() { showAverage = !showAverage; renderRegionChips(); buildStudentCharts(); }
 function pickAllRegions() { selectedRegions = new Set(STUDENT_DATA.strat.regions); renderRegionChips(); buildStudentCharts(); }
 function pickNoRegions() { selectedRegions.clear(); renderRegionChips(); buildStudentCharts(); }
 
@@ -513,7 +525,6 @@ function buildStudentCharts() {
 }
 
 function buildOneStudentChart(ds, canvasId, title, which) {
-  // months are newest-first in the data; reverse for chart (oldest→newest)
   const labels = [...ds.months].reverse();
   const datasets = ds.regions.filter(r => selectedRegions.has(r)).map(r => {
     const ri = ds.regions.indexOf(r);
@@ -529,6 +540,24 @@ function buildOneStudentChart(ds, canvasId, title, which) {
       fill: false
     };
   });
+
+  // Add Average line if toggled on
+  if (showAverage && ds.avgRow) {
+    datasets.push({
+      label: 'Average',
+      data: [...ds.avgRow].reverse(),
+      borderColor: '#fbbf24',
+      backgroundColor: 'rgba(251,191,36,.08)',
+      borderWidth: 3,
+      borderDash: [6, 3],
+      pointRadius: ds.months.length > 20 ? 0 : 3,
+      pointHoverRadius: 6,
+      pointBackgroundColor: '#fbbf24',
+      tension: 0.35,
+      fill: false,
+      order: -1  // draw on top
+    });
+  }
 
   if (which === 'strat' && stratChart) stratChart.destroy();
   if (which === 'ssm' && ssmChart) ssmChart.destroy();
