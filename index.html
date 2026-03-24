@@ -284,7 +284,7 @@ const STUDENT_TAB_NAME = 'Student Loads';
 function csvUrl(name) { return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(name)}`; }
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-const CACHE_VERSION = 'v7'; // bump this when data format changes
+const CACHE_VERSION = 'v8'; // bump this when data format changes
 
 // Clear stale caches from previous versions
 (function clearOldCache() {
@@ -439,7 +439,8 @@ function parseStudentCSV(csvText) {
     }
     if (dateCols >= 5) {
       headerRows.push(r);
-      console.log(`Header row ${r}: col0="${(rows[r][0]||'').trim()}" dateCols=${dateCols} sample="${(rows[r][1]||'').trim()}"`);
+      const sample = rows[r].slice(1, 6).map(c => `"${(c||'').trim()}"`).join(', ');
+      console.log(`Header row ${r}: col0="${(rows[r][0]||'').trim()}" dateCols=${dateCols} cells=[${sample}]`);
     }
   }
 
@@ -491,11 +492,12 @@ function parseStudentCSV(csvText) {
     for (let c = 1; c < hdr.length; c++) {
       const v = (hdr[c]||'').trim();
       if (!v) continue;
-      // Accept anything that's not purely numeric and not the first col label
-      if (isDateLike(v) || (isNaN(Number(v.replace(/,/g,''))) && v.toLowerCase() !== 'service region')) {
+      if (isDateLike(v)) {
         months.push(v); mCols.push(c);
       }
     }
+    console.log(`  parseSection(row ${headerIdx}→${nextHeaderIdx||'end'}): ${months.length} month cols, first="${months[0]}", last="${months[months.length-1]}", mCols=[${mCols.slice(0,5).join(',')}...]`);
+
     const regions = [], grid = [];
     let avgRow = null;
     const stopAt = nextHeaderIdx || rows.length;
@@ -503,7 +505,6 @@ function parseStudentCSV(csvText) {
       const label = (rows[r][0]||'').trim();
       if (!label) continue;
       if (label.toLowerCase().startsWith('students')) continue;
-      // Skip if this is another header row
       if (label.toLowerCase().includes('service region')) continue;
       const vals = mCols.map(c => parseInt((rows[r][c]||'').replace(/,/g,''),10)||0);
       if (label.toLowerCase() === 'average' || label.toLowerCase() === 'all regions') {
@@ -512,6 +513,8 @@ function parseStudentCSV(csvText) {
       regions.push(label);
       grid.push(vals);
     }
+    if (regions.length > 0) console.log(`  First region "${regions[0]}" sample vals: [${grid[0].slice(0,5).join(',')}]`);
+    if (avgRow) console.log(`  AvgRow sample: [${avgRow.slice(0,5).join(',')}]`);
     return { months, regions, grid, avgRow };
   }
 
