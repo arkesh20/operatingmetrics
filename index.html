@@ -233,11 +233,11 @@ document.getElementById('authInput').addEventListener('keydown', e => { if (e.ke
         <div class="chips" id="funnelMarketChips"></div>
       </div>
       <div class="chart-card anim d3">
-        <div class="chart-label" id="funnelMktConvTitle">Conversion Rates — USA</div>
+        <div class="chart-label" id="funnelMktConvTitle">Conversion Rates</div>
         <div class="chart-box" style="height:300px"><canvas id="funnelMktConvCanvas"></canvas></div>
       </div>
       <div class="chart-card anim d3">
-        <div class="chart-label" id="funnelMktVolTitle">Weekly Funnel — USA</div>
+        <div class="chart-label" id="funnelMktVolTitle">Weekly Funnel</div>
         <div class="chart-box"><canvas id="funnelMktVolCanvas"></canvas></div>
       </div>
     </div>
@@ -284,7 +284,7 @@ const STUDENT_TAB_NAME = 'Student Loads';
 function csvUrl(name) { return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(name)}`; }
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-const CACHE_VERSION = 'v4'; // bump this when data format changes
+const CACHE_VERSION = 'v5'; // bump this when data format changes
 
 // Clear stale caches from previous versions
 (function clearOldCache() {
@@ -413,17 +413,17 @@ function parsePivotCSV(csvText) {
 function parseStudentCSV(csvText) {
   const rows = Papa.parse(csvText, { header: false, skipEmptyLines: false }).data;
 
-  function findSection(startRow) {
-    let headerIdx = -1;
-    for (let r = startRow; r < rows.length; r++) {
-      const cell = (rows[r][0]||'').trim().toLowerCase();
-      if (cell.includes('service region') || cell === 'service region') {
-        headerIdx = r; break;
-      }
-    }
-    if (headerIdx === -1) return null;
+  // Step 1: Find ALL "Service Region" header rows
+  const headerRows = [];
+  for (let r = 0; r < rows.length; r++) {
+    const cell = (rows[r][0]||'').trim().toLowerCase();
+    if (cell === 'service region') headerRows.push(r);
+  }
+  console.log(`Found ${headerRows.length} Service Region headers at rows: ${headerRows.join(', ')}`);
+  if (headerRows.length < 2) throw new Error(`Expected 2 "Service Region" headers, found ${headerRows.length}`);
 
-    // Extract month headers — match both "Mar-26" and "2024-2-1" formats
+  // Step 2: Parse each section — read from header to the next header (or end of file)
+  function parseSection(headerIdx, nextHeaderIdx) {
     const hdr = rows[headerIdx];
     const months = [], mCols = [];
     const monthPatternOld = /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-\s]?\d{2,4}$/i;
@@ -435,34 +435,30 @@ function parseStudentCSV(csvText) {
       months.push(v); mCols.push(c);
     }
 
-    // Read ALL data rows, separate "All Regions" from individual regions
     const regions = [], grid = [];
     let avgRow = null;
-    let lastRowRead = headerIdx;
-    for (let r = headerIdx+1; r < rows.length; r++) {
+    const stopAt = nextHeaderIdx || rows.length;
+    for (let r = headerIdx + 1; r < stopAt; r++) {
       const label = (rows[r][0]||'').trim();
-      if (!label) { lastRowRead = r; break; }
-      lastRowRead = r;
+      if (!label) continue; // skip blank rows
+      // Skip section titles like "Students / SSM"
+      if (label.toLowerCase().startsWith('students')) continue;
       const vals = mCols.map(c => parseInt((rows[r][c]||'').replace(/,/g,''),10)||0);
       if (label.toLowerCase() === 'average' || label.toLowerCase() === 'all regions') {
-        avgRow = vals; // capture but don't break — keep reading
+        avgRow = vals;
         continue;
       }
       regions.push(label);
       grid.push(vals);
     }
 
-    return { months, regions, grid, avgRow, headerIdx, endRow: lastRowRead + 1 };
+    return { months, regions, grid, avgRow };
   }
 
-  const strat = findSection(0);
-  if (!strat) throw new Error('Could not find Students/Strat section.');
-  console.log(`Strat section: ${strat.regions.length} regions, ${strat.months.length} months, headerAt=${strat.headerIdx}, endRow=${strat.endRow}`);
-  // Search for SSM starting right after the strat header — findSection will skip past the strat data
-  // because it looks for the NEXT "Service Region" row
-  const ssm = findSection(strat.headerIdx + 1);
-  if (!ssm) throw new Error(`Could not find Students/SSM section. Searched from row ${strat.headerIdx + 1}. Total CSV rows: ${rows.length}`);
-  console.log(`SSM section: ${ssm.regions.length} regions, ${ssm.months.length} months, headerAt=${ssm.headerIdx}`);
+  const strat = parseSection(headerRows[0], headerRows[1]);
+  const ssm   = parseSection(headerRows[1], headerRows[2] || rows.length);
+  console.log(`Strat: ${strat.regions.length} regions, ${strat.months.length} months, avgRow=${strat.avgRow?'found':'missing'}`);
+  console.log(`SSM: ${ssm.regions.length} regions, ${ssm.months.length} months, avgRow=${ssm.avgRow?'found':'missing'}`);
 
   return { strat, ssm };
 }
@@ -484,7 +480,10 @@ async function loadAllData() {
       METRICS[key] = { weeks: filtered.weeks, grid: filtered.grid, markets: raw.markets, label: tab.label };
     }
     ALL_MARKETS = METRICS.created.markets;
-    selected = new Set(['USA']);
+    // Find the actual market name for USA (might be "United States of America", "USA", etc.)
+    const usaMarket = ALL_MARKETS.find(m => displayMarket(m) === 'USA') || ALL_MARKETS.find(m => m.toLowerCase().includes('usa') || m.toLowerCase().includes('united states')) || ALL_MARKETS[0];
+    selected = new Set([usaMarket]);
+    selectedFunnelMarket = usaMarket;
 
     // Student loads tab
     status.textContent = 'Loading Student Loads…';
@@ -1062,8 +1061,8 @@ function buildFunnelMarketCharts() {
   const closeRate = bVals.map((b,i) => b ? parseFloat(((dVals[i]/b)*100).toFixed(1)) : 0);
   const smooth = arr => arr.map((v,i) => { const w = arr.slice(Math.max(0,i-3),i+1); return parseFloat((w.reduce((a,b)=>a+b,0)/w.length).toFixed(1)); });
 
-  document.getElementById('funnelMktConvTitle').textContent = `Conversion Rates — ${displayMarket(m)}`;
-  document.getElementById('funnelMktVolTitle').textContent = `Weekly Funnel — ${displayMarket(m)}`;
+  document.getElementById('funnelMktConvTitle').textContent = 'Conversion Rates';
+  document.getElementById('funnelMktVolTitle').textContent = 'Weekly Funnel';
 
   const chartOpts = (yLabel, isPct) => ({responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
     plugins:{legend:{position:'bottom',labels:{boxWidth:12,padding:10,font:{size:10,family:'DM Sans'},color:'#8a93b8'}},
