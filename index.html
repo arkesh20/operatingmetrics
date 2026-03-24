@@ -284,7 +284,7 @@ const STUDENT_TAB_NAME = 'Student Loads';
 function csvUrl(name) { return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(name)}`; }
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-const CACHE_VERSION = 'v3'; // bump this when data format changes
+const CACHE_VERSION = 'v4'; // bump this when data format changes
 
 // Clear stale caches from previous versions
 (function clearOldCache() {
@@ -438,9 +438,11 @@ function parseStudentCSV(csvText) {
     // Read ALL data rows, separate "All Regions" from individual regions
     const regions = [], grid = [];
     let avgRow = null;
+    let lastRowRead = headerIdx;
     for (let r = headerIdx+1; r < rows.length; r++) {
       const label = (rows[r][0]||'').trim();
-      if (!label) break;
+      if (!label) { lastRowRead = r; break; }
+      lastRowRead = r;
       const vals = mCols.map(c => parseInt((rows[r][c]||'').replace(/,/g,''),10)||0);
       if (label.toLowerCase() === 'average' || label.toLowerCase() === 'all regions') {
         avgRow = vals; // capture but don't break — keep reading
@@ -450,13 +452,17 @@ function parseStudentCSV(csvText) {
       grid.push(vals);
     }
 
-    return { months, regions, grid, avgRow, endRow: headerIdx + regions.length + (avgRow ? 4 : 3) };
+    return { months, regions, grid, avgRow, headerIdx, endRow: lastRowRead + 1 };
   }
 
   const strat = findSection(0);
   if (!strat) throw new Error('Could not find Students/Strat section.');
-  const ssm = findSection(strat.endRow);
-  if (!ssm) throw new Error('Could not find Students/SSM section.');
+  console.log(`Strat section: ${strat.regions.length} regions, ${strat.months.length} months, headerAt=${strat.headerIdx}, endRow=${strat.endRow}`);
+  // Search for SSM starting right after the strat header — findSection will skip past the strat data
+  // because it looks for the NEXT "Service Region" row
+  const ssm = findSection(strat.headerIdx + 1);
+  if (!ssm) throw new Error(`Could not find Students/SSM section. Searched from row ${strat.headerIdx + 1}. Total CSV rows: ${rows.length}`);
+  console.log(`SSM section: ${ssm.regions.length} regions, ${ssm.months.length} months, headerAt=${ssm.headerIdx}`);
 
   return { strat, ssm };
 }
