@@ -284,7 +284,7 @@ const STUDENT_TAB_NAME = 'Student Loads';
 function csvUrl(name) { return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(name)}`; }
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-const CACHE_VERSION = 'v8'; // bump this when data format changes
+const CACHE_VERSION = 'v9'; // bump this when data format changes
 
 // Clear stale caches from previous versions
 (function clearOldCache() {
@@ -486,9 +486,9 @@ function parseStudentCSV(csvText) {
     throw new Error(`Expected 2 header rows, found ${headerRows.length}. Check console (F12) for row dump.`);
   }
 
-  function parseSection(headerIdx, nextHeaderIdx) {
+  function parseSection(headerIdx, nextHeaderIdx, fallbackMonths, fallbackMCols) {
     const hdr = rows[headerIdx];
-    const months = [], mCols = [];
+    let months = [], mCols = [];
     for (let c = 1; c < hdr.length; c++) {
       const v = (hdr[c]||'').trim();
       if (!v) continue;
@@ -496,7 +496,13 @@ function parseStudentCSV(csvText) {
         months.push(v); mCols.push(c);
       }
     }
-    console.log(`  parseSection(row ${headerIdx}→${nextHeaderIdx||'end'}): ${months.length} month cols, first="${months[0]}", last="${months[months.length-1]}", mCols=[${mCols.slice(0,5).join(',')}...]`);
+    // If this header row has no dates, reuse the previous section's columns
+    if (months.length === 0 && fallbackMonths && fallbackMCols) {
+      console.log(`  parseSection(row ${headerIdx}): 0 date cols found, reusing ${fallbackMonths.length} cols from previous section`);
+      months = fallbackMonths;
+      mCols = fallbackMCols;
+    }
+    console.log(`  parseSection(row ${headerIdx}→${nextHeaderIdx||'end'}): ${months.length} month cols, first="${months[0]}", last="${months[months.length-1]}"`);
 
     const regions = [], grid = [];
     let avgRow = null;
@@ -515,11 +521,11 @@ function parseStudentCSV(csvText) {
     }
     if (regions.length > 0) console.log(`  First region "${regions[0]}" sample vals: [${grid[0].slice(0,5).join(',')}]`);
     if (avgRow) console.log(`  AvgRow sample: [${avgRow.slice(0,5).join(',')}]`);
-    return { months, regions, grid, avgRow };
+    return { months, regions, grid, avgRow, _mCols: mCols };
   }
 
   const strat = parseSection(headerRows[0], headerRows[1]);
-  const ssm   = parseSection(headerRows[1], headerRows[2] || rows.length);
+  const ssm   = parseSection(headerRows[1], headerRows[2] || rows.length, strat.months, strat._mCols);
   console.log(`Strat: ${strat.regions.length} regions, ${strat.months.length} months`);
   console.log(`SSM: ${ssm.regions.length} regions, ${ssm.months.length} months`);
   return { strat, ssm };
